@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cube Blaster</title>
+    <style>
+        canvas {
+            border: 1px solid black;
+            background: #111;
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #progress-container {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 300px;
+            height: 30px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 15px;
+            overflow: hidden;
+        }
+        #progress-bar {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #ff0000, #ff9500);
+            transition: width 0.3s ease;
+        }
+        #highscore {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 80px;
+            color: #ff0000;
+            text-shadow: 0 0 20px #ff0000;
+            opacity: 0;
+            pointer-events: none;
+            animation: highscoreAnim 2s ease-out;
+        }
+        @keyframes highscoreAnim {
+            0% { opacity: 1; transform: translate(-50%, -50%) scale(0); }
+            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
+            100% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+        }
+    </style>
+</head>
+<body>
+    <div id="progress-container">
+        <div id="progress-bar"></div>
+    </div>
+    <div id="highscore">HIGH SCORE!</div>
+    <canvas id="canvas"></canvas>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.18.0/matter.min.js"></script>
+    <script>
+        const Engine = Matter.Engine,
+            Render = Matter.Render,
+            World = Matter.World,
+            Bodies = Matter.Bodies,
+            Events = Matter.Events,
+            Composite = Matter.Composite;
+
+        const engine = Engine.create();
+        const render = Render.create({
+            element: document.body,
+            engine: engine,
+            canvas: document.getElementById('canvas'),
+            options: {
+                width: window.innerWidth,
+                height: window.innerHeight,
+                wireframes: false,
+                background: '#111'
+            }
+        });
+
+        const collisionSound = new Audio('https://freesound.org/data/previews/80/80921_1025881-lq.mp3');
+        const breakSound = new Audio('https://freesound.org/data/previews/376/376409_6897853-lq.mp3');
+        const levelUpSound = new Audio('https://freesound.org/data/previews/605/605430_11861866-lq.mp3');
+
+        let particles = [];
+        let explosionParticles = [];
+        let boxes = [];
+        let score = 0;
+        let targetScore = 10;
+        let level = 1;
+
+        // Инициализация прогресс-бара
+        const progressBar = document.getElementById('progress-bar');
+        const highscoreElement = document.getElementById('highscore');
+
+        World.add(engine.world, [
+            Bodies.rectangle(400, -30, 1600, 60, { isStatic: true }),
+            Bodies.rectangle(400, 830, 1600, 60, { isStatic: true }),
+            Bodies.rectangle(-30, 400, 60, 1600, { isStatic: true }),
+            Bodies.rectangle(830, 400, 60, 1600, { isStatic: true })
+        ]);
+
+        function createBox() {
+            const side = Math.floor(Math.random() * 4);
+            let x, y;
+            const size = Math.random() * 30 + 20;
+            const hue = Math.floor(Math.random() * 360 / 30) * 30;
+            
+            switch(side) {
+                case 0: x = Math.random() * window.innerWidth; y = -50; break;
+                case 1: x = window.innerWidth + 50; y = Math.random() * window.innerHeight; break;
+                case 2: x = Math.random() * window.innerWidth; y = window.innerHeight + 50; break;
+                case 3: x = -50; y = Math.random() * window.innerHeight; break;
+            }
+
+            const box = Bodies.rectangle(x, y, size, size, {
+                restitution: 0.6,
+                friction: 0.1,
+                render: {
+                    fillStyle: `hsl(${hue}, 70%, 50%)`
+                }
+            });
+            
+            box.isBox = true;
+            box.hue = hue;
+            box.size = size;
+            box.alpha = 1;
+
+            Matter.Body.setVelocity(box, {
+                x: (window.innerWidth/2 - x) * 0.05,
+                y: (window.innerHeight/2 - y) * 0.05
+            });
+
+            World.add(engine.world, box);
+            boxes.push(box);
+        }
+
+        function updateProgress() {
+            const progress = (score / targetScore) * 100;
+            progressBar.style.width = `${Math.min(progress, 100)}%`;
+            
+            if(score >= targetScore) {
+                triggerLevelUp();
+            }
+        }
+
+        function triggerLevelUp() {
+            // Анимация
+            highscoreElement.style.animation = 'none';
+            void highscoreElement.offsetWidth;
+            highscoreElement.style.animation = 'highscoreAnim 2s ease-out';
+            
+            // Звук
+            levelUpSound.currentTime = 0;
+            levelUpSound.play();
+
+            // Удаление всех кубов
+            boxes.forEach(box => {
+                Composite.remove(engine.world, box);
+                createExplosion(box.position.x, box.position.y, box.hue);
+            });
+            boxes = [];
+            
+            // Сброс прогресса
+            score = 0;
+            targetScore = Math.floor(targetScore * 1.5);
+            level++;
+            
+            // Эффекты частиц
+            for(let i = 0; i < 100; i++) {
+                explosionParticles.push({
+                    x: window.innerWidth/2,
+                    y: window.innerHeight/2,
+                    vx: (Math.random() - 0.5) * 30,
+                    vy: (Math.random() - 0.5) * 30,
+                    life: 2.0,
+                    hue: Math.random() * 360,
+                    size: Math.random() * 8 + 4
+                });
+            }
+        }
+
+        function createExplosion(x, y, hue) {
+            for(let i = 0; i < 15; i++) {
+                explosionParticles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 20,
+                    vy: (Math.random() - 0.5) * 20,
+                    life: 1.5,
+                    hue: hue,
+                    size: Math.random() * 6 + 3
+                });
+            }
+        }
+
+        // Остальные функции (findNeighbors, explodeBoxes, checkColorGroups, drawParticles) остаются как в предыдущей версии
+        function findNeighbors(mainBox, checked = new Set()) {
+            const neighbors = [];
+            const queue = [mainBox];
+            
+            while(queue.length > 0) {
+                const current = queue.pop();
+                if(checked.has(current.id)) continue;
+                checked.add(current.id);
+                
+                boxes.forEach(box => {
+                    if(box.id !== current.id && 
+                       box.hue === current.hue &&
+                       Matter.Vector.magnitude(Matter.Vector.sub(current.position, box.position)) < 60) {
+                        neighbors.push(box);
+                        queue.push(box);
+                    }
+                });
+            }
+            return neighbors;
+        }
+
+        function explodeBoxes(group) {
+            group.forEach(box => {
+                // Анимация исчезновения
+                const animate = () => {
+                    if(box.alpha > 0) {
+                        box.alpha -= 0.05;
+                        box.render.opacity = box.alpha;
+                        requestAnimationFrame(animate);
+                    } else {
+                        Composite.remove(engine.world, box);
+                        boxes = boxes.filter(b => b.id !== box.id);
+                    }
+                };
+                animate();
+
+                // Создание частиц взрыва
+                for(let i = 0; i < 10; i++) {
+                    explosionParticles.push({
+                        x: box.position.x,
+                        y: box.position.y,
+                        vx: (Math.random() - 0.5) * 20,
+                        vy: (Math.random() - 0.5) * 20,
+                        life: 1.0,
+                        hue: box.hue,
+                        size: Math.random() * 5 + 3
+                    });
+                }
+            });
+            
+            breakSound.currentTime = 0;
+            breakSound.play();
+        }
+
+        function checkColorGroups() {
+            const checked = new Set();
+            
+            boxes.forEach(box => {
+                if(!checked.has(box.id)) {
+                    const group = findNeighbors(box, checked);
+                    if(group.length >= 3) {
+                        explodeBoxes(group);
+                    }
+                }
+            });
+        }
+
+
+        Events.on(engine, 'collisionStart', (event) => {
+            event.pairs.forEach((pair) => {
+                collisionSound.currentTime = 0;
+                collisionSound.play();
+
+                let sourceBody = pair.bodyA.isBox ? pair.bodyA : pair.bodyB;
+                if(!sourceBody.isBox) return;
+
+                for(let i = 0; i < 5; i++) {
+                    particles.push({
+                        x: pair.collision.supports[0].x,
+                        y: pair.collision.supports[0].y,
+                        vx: (Math.random() - 0.5) * 10,
+                        vy: (Math.random() - 0.5) * 10,
+                        life: 1.0,
+                        hue: sourceBody.hue
+                    });
+                }
+            });
+        });
+
+        function drawParticles() {
+            const ctx = render.context;
+            
+            particles.forEach((p, i) => {
+                ctx.fillStyle = `hsla(${p.hue}, 70%, 50%, ${p.life})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+                
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.03;
+                
+                if(p.life <= 0) particles.splice(i, 1);
+            });
+
+            explosionParticles.forEach((p, i) => {
+                ctx.fillStyle = `hsla(${p.hue}, 70%, 50%, ${p.life})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.3;
+                p.life -= 0.02;
+                p.size *= 0.98;
+                
+                if(p.life <= 0) explosionParticles.splice(i, 1);
+            });
+        }
+
+        Engine.run(engine);
+        Render.run(render);
+
+        setInterval(createBox, 500);
+        setInterval(() => {
+            checkColorGroups();
+            updateProgress();
+        }, 1000);
+
+        (function animate() {
+            drawParticles();
+            requestAnimationFrame(animate);
+        })();
+
+        window.addEventListener('resize', () => {
+            render.canvas.width = window.innerWidth;
+            render.canvas.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>
